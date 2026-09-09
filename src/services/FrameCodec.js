@@ -98,6 +98,7 @@ export function encodeFrame({ userId, messageId, type, text }) {
 }
 
 // decodeFrame(): recibe los bytes y reconstruye el objeto trama.
+// Devuelve null si la trama no es válida (para eso están estas comprobaciones).
 export function decodeFrame(bytes) {
   // Una trama válida ocupa como mínimo 9 bytes (cabecera sin texto).
   if (bytes.length < 9) return null;
@@ -105,6 +106,12 @@ export function decodeFrame(bytes) {
   const userId = readUint32(bytes, 0);    // USER_ID
   const messageId = readUint32(bytes, 4); // MESSAGE_ID
   const type = bytes[8];                  // TIPO
+
+  // Si el TIPO no es ninguno de los que conocemos, la trama está corrupta
+  // (o no es nuestra). Sin esta comprobación se descartaría en silencio más
+  // adelante sin dejar rastro en el log.
+  if (type !== TYPE_MSG && type !== TYPE_ACK && type !== TYPE_HELLO) return null;
+
   // El resto (a partir del byte 9) es el texto, si lo hay.
   const textBytes = bytes.slice(9);
   const text = textBytes.length ? bytesToText(textBytes) : '';

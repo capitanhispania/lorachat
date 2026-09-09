@@ -20,6 +20,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
+  Image,
   FlatList,
   TouchableOpacity,
   Alert,
@@ -29,6 +30,7 @@ import Storage from '../services/Storage';
 import ChatManager from '../state/ChatManager';
 import SerialService from '../services/SerialService';
 import LogModal from '../components/LogModal';
+import battleShoutIcon from '../assets/battle-shout.png';
 
 export default function ChatsListScreen({ onOpenChat, onOpenSettings }) {
   const [chats, setChats] = useState([]);
@@ -118,7 +120,7 @@ export default function ChatsListScreen({ onOpenChat, onOpenSettings }) {
           </TouchableOpacity>
           {/* Botón "¿Hay alguien ahí?": el más grande de todos, para que destaque */}
           <TouchableOpacity onPress={gritar} style={styles.headerBtn}>
-            <Text style={styles.shoutBtnText}>😱</Text>
+            <Image source={battleShoutIcon} style={styles.shoutIcon} />
           </TouchableOpacity>
           {/* Icono de logs (librito) */}
           <TouchableOpacity onPress={() => setShowLogs(true)} style={styles.headerBtn}>
@@ -171,7 +173,8 @@ const styles = StyleSheet.create({
   // Iconos (logs y ajustes): bastante más grandes que antes (era 16).
   iconBtnText: { color: '#fff', fontSize: 26 },
   // Botón "¿Hay alguien ahí?": el más grande de todos para que destaque.
-  shoutBtnText: { fontSize: 36 },
+  // Redondeado para que se vea como icono de app y no como una foto pegada.
+  shoutIcon: { width: 36, height: 36, borderRadius: 18 },
   // "Conectar" es texto, así que va como píldora en vez de crecer como un icono.
   connectBtn: {
     borderWidth: 1,

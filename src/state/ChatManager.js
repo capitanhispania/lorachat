@@ -73,11 +73,12 @@ const ChatManager = {
 
   // --- AYUDAS PARA EL LOG ----------------------------------------------
 
-  // _nombreDe(): PRIVADO. Nombre guardado de un userId (o "Usuario <id>").
+  // _nombreDe(): PRIVADO. Nombre guardado de un userId, o "Desconocido" si
+  // por lo que sea no está en contactos (seguro para que el log nunca falle).
   async _nombreDe(userId) {
     const contacts = await Storage.getContacts();
     const c = contacts[String(userId)];
-    return c ? c.name : 'Usuario ' + userId;
+    return c ? c.name : 'Desconocido(' + userId + ')';
   },
 
   // _parseRadio(): PRIVADO. Lee el trozo "rssi,snr,fei" que añade el ESP32.
@@ -207,7 +208,7 @@ const ChatManager = {
 
       const frame = decodeFrame(hexToBytes(hex));
       if (!frame) {
-        Logger.log('error: [ChatManager._onLine] trama inválida: ' + line);
+        Logger.log('error: [ChatManager._onLine] trama incorrecta: ' + line);
         return;
       }
 
