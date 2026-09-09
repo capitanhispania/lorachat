@@ -141,8 +141,12 @@ const SerialService = {
     try {
       const full = line + '\n';
       this.usbSerial.send(asciiToHex(full));
-      // Registramos lo enviado (línea legible, sin el hex del transporte).
-      Logger.log('enviado mensaje a esp32: ' + line);
+      // Las tramas de chat ("1|...") ya las loguea el ChatManager con nombre,
+      // texto y parámetros; aquí solo registramos el resto (config "2|...")
+      // para no repetir cada mensaje dos veces en hex.
+      if (!line.startsWith('1|')) {
+        Logger.log('enviado mensaje a esp32: ' + line);
+      }
     } catch (e) {
       Logger.error('SerialService.sendLine', e);
     }
@@ -176,8 +180,12 @@ const SerialService = {
       this.buffer = this.buffer.slice(idx + 1);
       line = line.replace(/\r$/, ''); // quitamos '\r' si viene '\r\n'
       if (line.length > 0) {
-        // Registramos TODO lo recibido, incluso los "OK|..." informativos.
-        Logger.log('recibido mensaje de esp32: ' + line);
+        // Las tramas recibidas ("R|...") las loguea el ChatManager con nombre,
+        // texto y medidas de radio; aquí solo registramos el resto ("OK|...",
+        // avisos del firmware) para no repetir cada mensaje dos veces en hex.
+        if (!line.startsWith('R|')) {
+          Logger.log('recibido mensaje de esp32: ' + line);
+        }
         // Y lo entregamos a los suscriptores (el ChatManager).
         this.lineListeners.forEach((cb) => cb(line));
       }

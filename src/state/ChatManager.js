@@ -11,13 +11,25 @@
  *   sendMessage(peerId, text) -> pide MESSAGE_ID -> guarda con ack=0 ->
  *   manda "1|<hex>" -> notifica UI.
  *
- * FLUJO AL RECIBIR ("R|<hex>"):
+ * FLUJO AL RECIBIR ("R|<hex>|<rssi>,<snr>,<fei>"):
  *   TIPO_MSG -> asegura contacto (desconocido si nuevo) -> guarda si nuevo ->
  *              SIEMPRE responde ACK -> notifica.
  *   TIPO_ACK -> busca mi mensaje en el chat de quien envía el ACK y lo marca
  *              ack=1; si no está, se ignora.
  *
  * AL ABRIR UN CHAT: resendPending(peerId) reenvía mis mensajes con ack=0.
+ * --------------------------------------------------------------------------
+ * MEDIDAS DE RADIO (RSSI / SNR / Frequency Error):
+ *   Las mide el módulo LoRa del ESP32 AL RECIBIR un paquete; la app no puede
+ *   calcularlas por su cuenta. Por eso el firmware las añade al final de la
+ *   línea, separadas por '|':   R|<hex>|<rssi>,<snr>,<fei>
+ *   Si el firmware es antiguo y no las manda, todo sigue funcionando igual
+ *   (simplemente el log dirá que no hay datos de radio).
+ *
+ *   OJO: en los mensajes ENVIADOS no hay RSSI/SNR/FEI. Una radio no se oye a
+ *   sí misma; esas medidas solo existen en el receptor. Lo que sí sabemos al
+ *   enviar es con qué parámetros se transmitió (SF/CR/TxPower), y cuando
+ *   llega el ACK, sus medidas nos dicen la calidad del enlace de vuelta.
  * ==========================================================================
  */
 
@@ -59,6 +71,40 @@ const ChatManager = {
     this.listeners.forEach((cb) => cb());
   },
 
+  // --- AYUDAS PARA EL LOG ----------------------------------------------
+
+  // _nombreDe(): PRIVADO. Nombre guardado de un userId (o "Usuario <id>").
+  async _nombreDe(userId) {
+    const contacts = await Storage.getContacts();
+    const c = contacts[String(userId)];
+    return c ? c.name : 'Usuario ' + userId;
+  },
+
+  // _parseRadio(): PRIVADO. Lee el trozo "rssi,snr,fei" que añade el ESP32.
+  // Si no viene (firmware antiguo) devuelve null.
+  _parseRadio(trozo) {
+    if (!trozo) return null;
+    const p = trozo.split(',');
+    if (p.length < 3) return null;
+    return { rssi: p[0], snr: p[1], fei: p[2] };
+  },
+
+  // _textoRadio(): PRIVADO. Formatea las medidas de radio para el log.
+  _textoRadio(radio) {
+    if (!radio) return ', sin datos de radio (el ESP32 no los envía)';
+    return (
+      ', RSSI = ' + radio.rssi + ' dBm' +
+      ', SNR = ' + radio.snr + ' dB' +
+      ', Frequency Error = ' + radio.fei + ' Hz'
+    );
+  },
+
+  // _textoConfig(): PRIVADO. Parámetros con los que se transmite (para envíos).
+  async _textoConfig() {
+    const cfg = await Storage.getConfig();
+    return ' [SF=' + cfg.sf + ', CR=' + cfg.cr + ', TxPower=' + cfg.txPower + ' dBm]';
+  },
+
   // --- ENVIAR ----------------------------------------------------------
 
   // sendMessage(): envía un mensaje normal a 'peerId'.
@@ -73,7 +119,14 @@ const ChatManager = {
       await Storage.saveChat(peerId, chat);
 
       // 3) Log semántico + envío de la trama (con MI userId).
-      Logger.log('enviando a Usuario ' + peerId + ' (msg #' + messageId + '): "' + text + '"');
+      // No hay RSSI/SNR al enviar (ver cabecera): logueamos los parámetros
+      // de transmisión, que es lo único real que sabemos en este momento.
+      const nombre = await this._nombreDe(peerId);
+      Logger.log(
+        'Enviado: mensaje de texto a ' + nombre +
+        ' (msg #' + messageId + '): "' + text + '"' +
+        (await this._textoConfig())
+      );
       this._sendFrame({ userId: this.myUserId, messageId, type: TYPE_MSG, text });
 
       // 4) Refrescamos la UI.
@@ -92,7 +145,11 @@ const ChatManager = {
         .sort((a, b) => a.messageId - b.messageId);
 
       if (pending.length > 0) {
-        Logger.log('reintentando ' + pending.length + ' mensaje(s) pendientes con Usuario ' + peerId);
+        const nombre = await this._nombreDe(peerId);
+        Logger.log(
+          'Enviado: reintento de ' + pending.length + ' mensaje(s) pendientes a ' + nombre +
+          (await this._textoConfig())
+        );
       }
 
       for (const m of pending) {
@@ -123,7 +180,10 @@ const ChatManager = {
       const messageId = await Storage.bumpNextMessageId();
       // El texto incluye mi nombre, para que el desconocido sepa quién soy.
       const text = '¿Hay alguien ahi? Mi nombre es ' + this.myUsername + '.';
-      Logger.log('enviando señal "¿Hay alguien ahí?" como ' + this.myUsername);
+      Logger.log(
+        'Enviado: mensaje de broadcast "¿Hay alguien ahí?" como ' + this.myUsername +
+        ' (msg #' + messageId + ')' + (await this._textoConfig())
+      );
       // Trama de tipo HELLO con MI userId.
       this._sendFrame({ userId: this.myUserId, messageId, type: TYPE_HELLO, text });
     } catch (e) {
@@ -140,7 +200,11 @@ const ChatManager = {
       // (Los "OK|..." ya los registró SerialService; aquí los ignoramos.)
       if (!line.startsWith('R|')) return;
 
-      const hex = line.slice(2);
+      // Formato: "R|<hex>" o "R|<hex>|<rssi>,<snr>,<fei>" (medidas opcionales).
+      const partes = line.split('|');
+      const hex = partes[1] || '';
+      const radio = this._parseRadio(partes[2]);
+
       const frame = decodeFrame(hexToBytes(hex));
       if (!frame) {
         Logger.log('error: [ChatManager._onLine] trama inválida: ' + line);
@@ -151,11 +215,11 @@ const ChatManager = {
       if (frame.userId === this.myUserId) return;
 
       if (frame.type === TYPE_MSG) {
-        await this._handleIncomingMessage(frame);
+        await this._handleIncomingMessage(frame, radio);
       } else if (frame.type === TYPE_ACK) {
-        await this._handleIncomingAck(frame);
+        await this._handleIncomingAck(frame, radio);
       } else if (frame.type === TYPE_HELLO) {
-        await this._handleIncomingHello(frame);
+        await this._handleIncomingHello(frame, radio);
       }
     } catch (e) {
       Logger.error('ChatManager._onLine', e);
@@ -163,7 +227,7 @@ const ChatManager = {
   },
 
   // _handleIncomingMessage(): PRIVADO. Llega un mensaje normal de 'senderId'.
-  async _handleIncomingMessage(frame) {
+  async _handleIncomingMessage(frame, radio) {
     const senderId = frame.userId;
 
     // 1) Aseguramos el contacto. Si es nuevo, se crea DESCONOCIDO.
@@ -172,6 +236,9 @@ const ChatManager = {
       await Storage.upsertContact(senderId, { known: false });
       Logger.log('nuevo usuario desconocido detectado: ' + senderId);
     }
+
+    // Nombre para los logs (ya existe el contacto seguro).
+    const nombre = await this._nombreDe(senderId);
 
     // 2) Dedup por messageId de mensajes recibidos.
     const chat = await Storage.getChat(senderId);
@@ -187,27 +254,42 @@ const ChatManager = {
         ts: Date.now(),
       });
       await Storage.saveChat(senderId, chat);
-      Logger.log('mensaje recibido de Usuario ' + senderId + ' (msg #' + frame.messageId + '): "' + frame.text + '"');
+      Logger.log(
+        'Recibido: mensaje de texto de ' + nombre +
+        ' (msg #' + frame.messageId + '): "' + frame.text + '"' +
+        this._textoRadio(radio)
+      );
     } else {
-      Logger.log('mensaje duplicado de Usuario ' + senderId + ' (msg #' + frame.messageId + '), reenvío ACK');
+      Logger.log(
+        'Recibido: mensaje de texto DUPLICADO de ' + nombre +
+        ' (msg #' + frame.messageId + '), reenvío ACK' +
+        this._textoRadio(radio)
+      );
     }
 
     // 4) SIEMPRE respondemos ACK (aunque fuese duplicado).
-    this._sendAck(frame.messageId);
+    await this._sendAck(frame.messageId, nombre);
 
     // 5) Refrescamos la UI.
     this._notify();
   },
 
   // _handleIncomingHello(): PRIVADO. Llega una señal "¿Hay alguien ahí?".
-  async _handleIncomingHello(frame) {
+  async _handleIncomingHello(frame, radio) {
     const senderId = frame.userId;
 
     // Si YA tenemos guardado a este usuario (conocido o desconocido), la
     // ignoramos: ya existe un chat con él y no queremos duplicar la entrada.
+    // Aun así lo logueamos con sus medidas: saber que su broadcast llega
+    // (y con qué calidad) es justo lo que interesa para probar alcance.
     const contacts = await Storage.getContacts();
     if (contacts[String(senderId)]) {
-      Logger.log('señal de Usuario ' + senderId + ' ignorada (ya es contacto)');
+      const nombreYaGuardado = contacts[String(senderId)].name;
+      Logger.log(
+        'Recibido: mensaje de broadcast de ' + nombreYaGuardado +
+        ' -> IGNORADO (ya está guardado como contacto)' +
+        this._textoRadio(radio)
+      );
       return;
     }
 
@@ -223,7 +305,11 @@ const ChatManager = {
       ts: Date.now(),
     });
     await Storage.saveChat(senderId, chat);
-    Logger.log('nueva señal de Usuario ' + senderId + ': "' + frame.text + '"');
+    Logger.log(
+      'Recibido: mensaje de broadcast de DESCONOCIDO (' + senderId + '): "' + frame.text + '"' +
+      ' -> creado chat nuevo' +
+      this._textoRadio(radio)
+    );
 
     // No respondemos ACK: la señal es fuego y olvido. Si quieres hablar con él,
     // abres el chat, le pones nombre y le escribes (eso ya es un mensaje normal).
@@ -231,9 +317,10 @@ const ChatManager = {
   },
 
   // _handleIncomingAck(): PRIVADO. Llega un ACK de 'senderId' para mi msg M.
-  async _handleIncomingAck(frame) {
+  async _handleIncomingAck(frame, radio) {
     const senderId = frame.userId;
     const messageId = frame.messageId;
+    const nombre = await this._nombreDe(senderId);
 
     // Mi mensaje enviado a ese usuario está en SU chat. Si el ACK viene de
     // otro, en su chat no habrá nada que coincida y se ignora.
@@ -249,15 +336,27 @@ const ChatManager = {
 
     if (cambiado) {
       await Storage.saveChat(senderId, chat);
-      Logger.log('ACK de Usuario ' + senderId + ' para msg #' + messageId + ' -> confirmado (doble tick)');
+      Logger.log(
+        'Recibido: mensaje de ACK de ' + nombre +
+        ' (msg #' + messageId + ') -> confirmado (doble tick)' +
+        this._textoRadio(radio)
+      );
       this._notify();
     } else {
-      Logger.log('ACK de Usuario ' + senderId + ' para msg #' + messageId + ' ignorado (no era para él)');
+      Logger.log(
+        'Recibido: mensaje de ACK de ' + nombre +
+        ' (msg #' + messageId + ') -> ignorado (no era para él)' +
+        this._textoRadio(radio)
+      );
     }
   },
 
   // _sendAck(): PRIVADO. Envía un ACK con MI userId y el messageId dado.
-  _sendAck(messageId) {
+  async _sendAck(messageId, nombreDestino) {
+    Logger.log(
+      'Enviado: mensaje de ACK a ' + nombreDestino + ' (msg #' + messageId + ')' +
+      (await this._textoConfig())
+    );
     this._sendFrame({ userId: this.myUserId, messageId, type: TYPE_ACK, text: '' });
   },
 

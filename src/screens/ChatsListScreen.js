@@ -112,21 +112,21 @@ export default function ChatsListScreen({ onOpenChat, onOpenSettings }) {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>LoRa Chat</Text>
         <View style={styles.headerActions}>
-          {/* Conectar / estado */}
-          <TouchableOpacity onPress={conectar} style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>{connected ? 'USB ✓' : 'Conectar'}</Text>
+          {/* Conectar / estado: botón de texto en forma de "píldora" */}
+          <TouchableOpacity onPress={conectar} style={styles.connectBtn}>
+            <Text style={styles.connectBtnText}>{connected ? 'USB ✓' : 'Conectar'}</Text>
           </TouchableOpacity>
-          {/* Botón "¿Hay alguien ahí?" (broadcast de presentación), más grande */}
+          {/* Botón "¿Hay alguien ahí?": el más grande de todos, para que destaque */}
           <TouchableOpacity onPress={gritar} style={styles.headerBtn}>
             <Text style={styles.shoutBtnText}>😱</Text>
           </TouchableOpacity>
           {/* Icono de logs (librito) */}
           <TouchableOpacity onPress={() => setShowLogs(true)} style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>📖</Text>
+            <Text style={styles.iconBtnText}>📖</Text>
           </TouchableOpacity>
           {/* Icono de ajustes */}
           <TouchableOpacity onPress={onOpenSettings} style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>⚙</Text>
+            <Text style={styles.iconBtnText}>⚙️</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -163,12 +163,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  headerTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+  // flexShrink: si los iconos ocupan mucho, el título se encoge en vez de romper la barra.
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', flexShrink: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center' },
-  headerBtn: { marginLeft: 16 },
-  headerBtnText: { color: '#fff', fontSize: 16 },
-  // Botón "¿Hay alguien ahí?": más grande que los demás para que destaque.
-  shoutBtnText: { fontSize: 28 },
+  // Separación entre iconos + zona de toque cómoda (sin agrandar la barra).
+  headerBtn: { marginLeft: 12, paddingHorizontal: 4, paddingVertical: 2 },
+  // Iconos (logs y ajustes): bastante más grandes que antes (era 16).
+  iconBtnText: { color: '#fff', fontSize: 26 },
+  // Botón "¿Hay alguien ahí?": el más grande de todos para que destaque.
+  shoutBtnText: { fontSize: 36 },
+  // "Conectar" es texto, así que va como píldora en vez de crecer como un icono.
+  connectBtn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  connectBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   row: {
     paddingVertical: 14,
     paddingHorizontal: 16,
