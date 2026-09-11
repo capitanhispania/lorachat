@@ -12,6 +12,16 @@
  *   - TIPO       : 0 = mensaje normal, 1 = ACK.
  *   - TEXTO      : bytes UTF-8 del texto (vacío en los ACK).
  *
+ * SOLO en los mensajes normales (TIPO 0) van además las coordenadas GPS de
+ * quien envía, justo antes del texto:
+ *
+ *   [ USER_ID (4) ][ MESSAGE_ID (4) ][ TIPO (1) ][ LAT (4) ][ LON (4) ][ TEXTO... ]
+ *
+ *   - LAT / LON : grados multiplicados por 10.000.000 y guardados como
+ *                 entero CON signo de 4 bytes (precisión de ~1 cm).
+ *                 LAT = 0 y LON = 0 significa "sin coordenadas" (el emisor
+ *                 no tenía posición GPS). Al leer se devuelven como null.
+ *
  * Los enteros de 4 bytes se guardan en "big-endian" (el byte más
  * significativo primero). Da igual el criterio mientras las dos placas
  * usen el mismo, y como la app es la misma en ambos móviles, coincide.
@@ -22,7 +32,7 @@
  * FUNCIONES EXPORTADAS:
  *   TYPE_MSG, TYPE_ACK  -> constantes de tipo.
  *   encodeFrame(obj)    -> objeto trama  -> Uint8Array (bytes).
- *   decodeFrame(bytes)  -> Uint8Array    -> objeto trama.
+ *   decodeFrame(bytes)  -> Uint8Array    -> objeto trama (con lat/lon o null).
  *   bytesToHex(bytes)   -> Uint8Array    -> string hex.
  *   hexToBytes(hex)     -> string hex     -> Uint8Array.
  * ==========================================================================
@@ -82,17 +92,28 @@ function readUint32(buf, offset) {
 
 // --- Codificación / decodificación de la trama completa ----------------
 
-// encodeFrame(): recibe { userId, messageId, type, text } y devuelve los bytes.
-export function encodeFrame({ userId, messageId, type, text }) {
+// encodeFrame(): recibe { userId, messageId, type, text, lat, lon } y
+// devuelve los bytes. lat/lon solo se usan en TYPE_MSG; si son null, van a 0.
+export function encodeFrame({ userId, messageId, type, text, lat, lon }) {
   // Si hay texto lo pasamos a bytes; si no, array vacío (caso ACK).
   const textBytes = text ? textToBytes(text) : new Uint8Array(0);
-  // Tamaño total = 4 (userId) + 4 (messageId) + 1 (tipo) + longitud del texto.
-  const buf = new Uint8Array(9 + textBytes.length);
+  // Los mensajes normales llevan 8 bytes más con las coordenadas.
+  const cabecera = type === TYPE_MSG ? 17 : 9;
+  // Tamaño total = cabecera + longitud del texto.
+  const buf = new Uint8Array(cabecera + textBytes.length);
 
   writeUint32(buf, 0, userId);     // bytes 0..3  -> USER_ID
   writeUint32(buf, 4, messageId);  // bytes 4..7  -> MESSAGE_ID
   buf[8] = type & 0xff;            // byte 8      -> TIPO
-  buf.set(textBytes, 9);           // bytes 9..   -> TEXTO
+
+  if (type === TYPE_MSG) {
+    // Si no hay posición escribimos 0 (= "sin coordenadas").
+    // writeUint32 guarda bien los negativos (complemento a dos).
+    writeUint32(buf, 9, lat != null ? Math.round(lat * 1e7) : 0);  // bytes 9..12  -> LAT
+    writeUint32(buf, 13, lon != null ? Math.round(lon * 1e7) : 0); // bytes 13..16 -> LON
+  }
+
+  buf.set(textBytes, cabecera);    // resto       -> TEXTO
 
   return buf;
 }
@@ -112,11 +133,28 @@ export function decodeFrame(bytes) {
   // adelante sin dejar rastro en el log.
   if (type !== TYPE_MSG && type !== TYPE_ACK && type !== TYPE_HELLO) return null;
 
-  // El resto (a partir del byte 9) es el texto, si lo hay.
-  const textBytes = bytes.slice(9);
+  // Coordenadas: solo en mensajes normales con sitio para ellas (17 bytes).
+  // Si no están, se quedan en null y el texto empieza en el byte 9 como antes.
+  let lat = null;
+  let lon = null;
+  let inicioTexto = 9;
+  if (type === TYPE_MSG && bytes.length >= 17) {
+    // "| 0" convierte el entero leído en un número CON signo (para los negativos).
+    const latInt = readUint32(bytes, 9) | 0;
+    const lonInt = readUint32(bytes, 13) | 0;
+    // 0 y 0 significa que el emisor no tenía posición: las dejamos en null.
+    if (latInt !== 0 || lonInt !== 0) {
+      lat = latInt / 1e7;
+      lon = lonInt / 1e7;
+    }
+    inicioTexto = 17;
+  }
+
+  // El resto es el texto, si lo hay.
+  const textBytes = bytes.slice(inicioTexto);
   const text = textBytes.length ? bytesToText(textBytes) : '';
 
-  return { userId, messageId, type, text };
+  return { userId, messageId, type, text, lat, lon };
 }
 
 // --- Helpers hex <-> bytes (para el tramo USB) -------------------------

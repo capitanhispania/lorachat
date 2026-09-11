@@ -30,12 +30,20 @@
  *   sí misma; esas medidas solo existen en el receptor. Lo que sí sabemos al
  *   enviar es con qué parámetros se transmitió (SF/CR/TxPower), y cuando
  *   llega el ACK, sus medidas nos dicen la calidad del enlace de vuelta.
+ * --------------------------------------------------------------------------
+ * DISTANCIA (GPS):
+ *   Cada mensaje normal lleva las coordenadas de quien lo envía (ver
+ *   FrameCodec). Al recibirlo, se comparan con MI última posición (Gps) y la
+ *   distancia se añade al log de "Recibido". Si falta cualquiera de las dos
+ *   o algo falla, el log pone "Distance = N/A" y el motivo; el mensaje se
+ *   procesa exactamente igual que siempre.
  * ==========================================================================
  */
 
 import SerialService from '../services/SerialService';
 import Storage from '../services/Storage';
 import Logger from '../services/Logger';
+import Gps from '../services/Gps';
 import {
   encodeFrame,
   decodeFrame,
@@ -57,6 +65,8 @@ const ChatManager = {
     this.myUsername = myUsername;
     SerialService.onLine((line) => this._onLine(line));
     Logger.log('app iniciada con USER_ID ' + myUserId);
+    // Arrancamos el GPS en segundo plano (no esperamos: si falla, solo lo anota).
+    Gps.start();
   },
 
   // subscribe(): la UI se entera de cambios. Devuelve función para quitarlo.
@@ -106,6 +116,33 @@ const ChatManager = {
     return ' [SF=' + cfg.sf + ', CR=' + cfg.cr + ', TxPower=' + cfg.txPower + ' dBm]';
   },
 
+  // _textoDistancia(): PRIVADO. Distancia entre el emisor y yo, para el log.
+  // Si falta algún dato o algo falla, anota el motivo y devuelve "N/A".
+  _textoDistancia(frame) {
+    try {
+      if (frame.lat == null || frame.lon == null) {
+        Logger.log('GPS: el mensaje llegó sin coordenadas (el emisor no tenía posición)');
+        return ', Distance = N/A';
+      }
+      if (Math.abs(frame.lat) > 90 || Math.abs(frame.lon) > 180) {
+        Logger.log('error: [ChatManager._textoDistancia] coordenadas del emisor inválidas: ' + frame.lat + ', ' + frame.lon);
+        return ', Distance = N/A';
+      }
+      const yo = Gps.getMyPos();
+      if (!yo) {
+        Logger.log('GPS: todavía no tengo mi propia posición');
+        return ', Distance = N/A';
+      }
+      const km = Gps.distanceKm(yo, { lat: frame.lat, lon: frame.lon });
+      // Por debajo de 1 km lo mostramos en metros, que se lee mejor.
+      if (km < 1) return ', Distance = ' + Math.round(km * 1000) + ' m';
+      return ', Distance = ' + km.toFixed(2) + ' km';
+    } catch (e) {
+      Logger.error('ChatManager._textoDistancia', e);
+      return ', Distance = N/A';
+    }
+  },
+
   // --- ENVIAR ----------------------------------------------------------
 
   // sendMessage(): envía un mensaje normal a 'peerId'.
@@ -128,7 +165,17 @@ const ChatManager = {
         ' (msg #' + messageId + '): "' + text + '"' +
         (await this._textoConfig())
       );
-      this._sendFrame({ userId: this.myUserId, messageId, type: TYPE_MSG, text });
+      // Mi última posición GPS (o null si todavía no hay).
+      const pos = Gps.getMyPos();
+      if (!pos) Logger.log('GPS: no tengo mi posición todavía, el mensaje se envía sin coordenadas');
+      this._sendFrame({
+        userId: this.myUserId,
+        messageId,
+        type: TYPE_MSG,
+        text,
+        lat: pos ? pos.lat : null,
+        lon: pos ? pos.lon : null,
+      });
 
       // 4) Refrescamos la UI.
       this._notify();
@@ -153,12 +200,16 @@ const ChatManager = {
         );
       }
 
+      // Los reintentos llevan mi posición ACTUAL (o ninguna si no hay).
+      const pos = Gps.getMyPos();
       for (const m of pending) {
         this._sendFrame({
           userId: this.myUserId,
           messageId: m.messageId,
           type: TYPE_MSG,
           text: m.text,
+          lat: pos ? pos.lat : null,
+          lon: pos ? pos.lon : null,
         });
       }
     } catch (e) {
@@ -258,6 +309,7 @@ const ChatManager = {
       Logger.log(
         'Recibido: mensaje de texto de ' + nombre +
         ' (msg #' + frame.messageId + '): "' + frame.text + '"' +
+        this._textoDistancia(frame) +
         this._textoRadio(radio)
       );
     } else {
