@@ -32,9 +32,9 @@
  *   llega el ACK, sus medidas nos dicen la calidad del enlace de vuelta.
  * --------------------------------------------------------------------------
  * DISTANCIA (GPS):
- *   Cada mensaje normal lleva las coordenadas de quien lo envía (ver
- *   FrameCodec). Al recibirlo, se comparan con MI última posición (Gps) y la
- *   distancia se añade al log de "Recibido". Si falta cualquiera de las dos
+ *   Cada mensaje normal y cada ACK llevan las coordenadas de quien los envía
+ *   (ver FrameCodec). Al recibirlos, se comparan con MI última posición (Gps)
+ *   y la distancia se añade al log de "Recibido". Si falta cualquiera de las dos
  *   o algo falla, el log pone "Distance = N/A" y el motivo; el mensaje se
  *   procesa exactamente igual que siempre.
  * ==========================================================================
@@ -392,6 +392,7 @@ const ChatManager = {
       Logger.log(
         'Recibido: mensaje de ACK de ' + nombre +
         ' (msg #' + messageId + ') -> confirmado (doble tick)' +
+        this._textoDistancia(frame) +
         this._textoRadio(radio)
       );
       this._notify();
@@ -399,18 +400,28 @@ const ChatManager = {
       Logger.log(
         'Recibido: mensaje de ACK de ' + nombre +
         ' (msg #' + messageId + ') -> ignorado (no era para él)' +
+        this._textoDistancia(frame) +
         this._textoRadio(radio)
       );
     }
   },
 
-  // _sendAck(): PRIVADO. Envía un ACK con MI userId y el messageId dado.
+  // _sendAck(): PRIVADO. Envía un ACK con MI userId, el messageId dado y mi
+  // última posición GPS (o ninguna si todavía no hay).
   async _sendAck(messageId, nombreDestino) {
     Logger.log(
       'Enviado: mensaje de ACK a ' + nombreDestino + ' (msg #' + messageId + ')' +
       (await this._textoConfig())
     );
-    this._sendFrame({ userId: this.myUserId, messageId, type: TYPE_ACK, text: '' });
+    const pos = Gps.getMyPos();
+    this._sendFrame({
+      userId: this.myUserId,
+      messageId,
+      type: TYPE_ACK,
+      text: '',
+      lat: pos ? pos.lat : null,
+      lon: pos ? pos.lon : null,
+    });
   },
 
   // _sendFrame(): PRIVADO. Codifica una trama y la manda por serie ("1|<hex>").

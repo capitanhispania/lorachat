@@ -12,8 +12,8 @@
  *   - TIPO       : 0 = mensaje normal, 1 = ACK.
  *   - TEXTO      : bytes UTF-8 del texto (vacío en los ACK).
  *
- * SOLO en los mensajes normales (TIPO 0) van además las coordenadas GPS de
- * quien envía, justo antes del texto:
+ * En los mensajes normales (TIPO 0) y en los ACK (TIPO 1) van además las
+ * coordenadas GPS de quien envía, justo antes del texto:
  *
  *   [ USER_ID (4) ][ MESSAGE_ID (4) ][ TIPO (1) ][ LAT (4) ][ LON (4) ][ TEXTO... ]
  *
@@ -93,12 +93,14 @@ function readUint32(buf, offset) {
 // --- Codificación / decodificación de la trama completa ----------------
 
 // encodeFrame(): recibe { userId, messageId, type, text, lat, lon } y
-// devuelve los bytes. lat/lon solo se usan en TYPE_MSG; si son null, van a 0.
+// devuelve los bytes. lat/lon solo se usan en TYPE_MSG y TYPE_ACK; si son
+// null, van a 0.
 export function encodeFrame({ userId, messageId, type, text, lat, lon }) {
   // Si hay texto lo pasamos a bytes; si no, array vacío (caso ACK).
   const textBytes = text ? textToBytes(text) : new Uint8Array(0);
-  // Los mensajes normales llevan 8 bytes más con las coordenadas.
-  const cabecera = type === TYPE_MSG ? 17 : 9;
+  // Los mensajes normales y los ACK llevan 8 bytes más con las coordenadas.
+  const llevaGps = type === TYPE_MSG || type === TYPE_ACK;
+  const cabecera = llevaGps ? 17 : 9;
   // Tamaño total = cabecera + longitud del texto.
   const buf = new Uint8Array(cabecera + textBytes.length);
 
@@ -106,7 +108,7 @@ export function encodeFrame({ userId, messageId, type, text, lat, lon }) {
   writeUint32(buf, 4, messageId);  // bytes 4..7  -> MESSAGE_ID
   buf[8] = type & 0xff;            // byte 8      -> TIPO
 
-  if (type === TYPE_MSG) {
+  if (llevaGps) {
     // Si no hay posición escribimos 0 (= "sin coordenadas").
     // writeUint32 guarda bien los negativos (complemento a dos).
     writeUint32(buf, 9, lat != null ? Math.round(lat * 1e7) : 0);  // bytes 9..12  -> LAT
@@ -133,12 +135,13 @@ export function decodeFrame(bytes) {
   // adelante sin dejar rastro en el log.
   if (type !== TYPE_MSG && type !== TYPE_ACK && type !== TYPE_HELLO) return null;
 
-  // Coordenadas: solo en mensajes normales con sitio para ellas (17 bytes).
-  // Si no están, se quedan en null y el texto empieza en el byte 9 como antes.
+  // Coordenadas: solo en mensajes normales y ACK con sitio para ellas (17
+  // bytes). Si no están (p. ej. un ACK antiguo de 9 bytes), se quedan en null
+  // y el texto empieza en el byte 9 como antes.
   let lat = null;
   let lon = null;
   let inicioTexto = 9;
-  if (type === TYPE_MSG && bytes.length >= 17) {
+  if ((type === TYPE_MSG || type === TYPE_ACK) && bytes.length >= 17) {
     // "| 0" convierte el entero leído en un número CON signo (para los negativos).
     const latInt = readUint32(bytes, 9) | 0;
     const lonInt = readUint32(bytes, 13) | 0;
